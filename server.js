@@ -5,7 +5,6 @@ require('dotenv').config();
 const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
-const { a } = require('googleapis/build/src/apis/abusiveexperiencereport');
 
 // Initialize the express app
 const app = express();
@@ -31,7 +30,7 @@ oAuth2Client.setCredentials({
 const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
 
 // ====================================================================
-// NEW: Endpoint to get available time slots
+// Endpoint to get available time slots
 // ====================================================================
 app.get('/availability', async (req, res) => {
   try {
