@@ -6,10 +6,8 @@ const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const axios = require('axios'); // Used to send data to Jotform
-
-// --- ADDED FOR BREVO ---
-const Brevo = require('sib-api-v3-sdk');
-// -----------------------
+const Brevo = require('sib-api-v3-sdk'); // For sending emails
+const { formatInTimeZone } = require('date-fns-tz'); // For formatting dates
 
 // Initialize the express app
 const app = express();
@@ -31,7 +29,6 @@ oAuth2Client.setCredentials({
 const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
 
 // ====================================================================
-// --- ADDED FOR BREVO ---
 // Function to send a confirmation email using Brevo
 // ====================================================================
 async function sendBrevoConfirmationEmail(formData, meetLink) {
@@ -43,33 +40,47 @@ async function sendBrevoConfirmationEmail(formData, meetLink) {
     return;
   }
 
+  // Format the date and time nicely
+  const eventStart = new Date(formData.startISO);
+  const clientTimeZone = formData.timezone || 'Asia/Kuala_Lumpur';
+  const formattedDateTime = formatInTimeZone(eventStart, clientTimeZone, "eeee, d MMMM yyyy 'at' h:mm a (zzzz)");
+
+  // Richer HTML with logo and event details
+  const emailHtmlContent = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+      <img src="https://seo-ku.com/wp-content/uploads/2025/09/seo-ku.svg" alt="SEO-ku Logo" style="width: 150px; margin-bottom: 20px;">
+      <h3>Hi ${formData.name},</h3>
+      <p>Thank you for booking a consultation. Your meeting is confirmed!</p>
+      <div style="background-color: #f4f4f4; padding: 15px; border-radius: 5px;">
+        <strong>Topic:</strong> SEO Consultation for ${formData.company}<br>
+        <strong>Date & Time:</strong> ${formattedDateTime}<br>
+        <strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a>
+      </div>
+      <p>An official invitation has been sent to your calendar separately. We look forward to speaking with you.</p>
+      <br/>
+      <p>Best regards,</p>
+      <p><strong>The SEO-ku Team</strong></p>
+    </div>
+  `;
+
   // Configure the Brevo API client
   const apiClient = Brevo.ApiClient.instance;
   const apiKey = apiClient.authentications['api-key'];
   apiKey.apiKey = process.env.BREVO_API_KEY;
-
   const transactionalEmailsApi = new Brevo.TransactionalEmailsApi();
 
   const msgToClient = {
     sender: { email: SENDER_EMAIL, name: 'SEO-ku Consulting' },
     to: [{ email: formData.email, name: formData.name }],
     subject: `Your Consultation is Confirmed: ${formData.company}`,
-    htmlContent: `
-      <h3>Hi ${formData.name},</h3>
-      <p>Thank you for booking a consultation. Your meeting is confirmed and has been added to your calendar.</p>
-      <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
-      <p>We look forward to speaking with you.</p>
-      <br/>
-      <p>Best regards,</p>
-      <p>The SEO-ku Team</p>
-    `,
+    htmlContent: emailHtmlContent,
   };
   
   const msgToAdmin = {
-      sender: { email: SENDER_EMAIL, name: 'SEO-ku Booking System' },
-      to: [{ email: RECIPIENT_EMAIL }],
-      subject: `New Booking: ${formData.company}`,
-      textContent: `A new consultation has been booked with ${formData.name} (${formData.email}).\n\nThe event has been added to your Google Calendar.`
+    sender: { email: SENDER_EMAIL, name: 'SEO-ku Booking System' },
+    to: [{ email: RECIPIENT_EMAIL }],
+    subject: `New Booking: ${formData.company}`,
+    textContent: `A new consultation has been booked with ${formData.name} (${formData.email}) for ${formattedDateTime}. The event has been added to your Google Calendar.`
   };
 
   try {
@@ -90,7 +101,7 @@ async function submitToJotform(formData) {
   const JOTFORM_FORM_ID = process.env.JOTFORM_FORM_ID;
 
   if (!JOTFORM_API_KEY || !JOTFORM_FORM_ID) {
-    console.log('Jotform credentials not found in environment, skipping submission.');
+    console.log('Jotform credentials not found, skipping submission.');
     return;
   }
 
@@ -195,12 +206,9 @@ app.post('/book', async (req, res) => {
     });
     console.log('Event created:', createdEvent.data.htmlLink);
     
-    // --- ADDED FOR BREVO ---
     // After everything else is successful, send the confirmation emails.
-    // Use a 'fire-and-forget' approach so we don't wait for it to finish.
     sendBrevoConfirmationEmail(payload, createdEvent.data.hangoutLink);
-    // -----------------------
-
+    
     // Submit the data to Jotform.
     await submitToJotform(payload);
 
