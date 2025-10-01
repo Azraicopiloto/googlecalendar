@@ -7,6 +7,10 @@ const { google } = require('googleapis');
 const cors = require('cors');
 const axios = require('axios'); // Used to send data to Jotform
 
+// --- ADDED FOR BREVO ---
+const Brevo = require('sib-api-v3-sdk');
+// -----------------------
+
 // Initialize the express app
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -27,6 +31,58 @@ oAuth2Client.setCredentials({
 const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
 
 // ====================================================================
+// --- ADDED FOR BREVO ---
+// Function to send a confirmation email using Brevo
+// ====================================================================
+async function sendBrevoConfirmationEmail(formData, meetLink) {
+  const SENDER_EMAIL = process.env.SENDER_EMAIL;
+  const RECIPIENT_EMAIL = process.env.RECIPIENT_EMAIL;
+
+  if (!process.env.BREVO_API_KEY) {
+    console.log('Brevo API key not found, skipping email notification.');
+    return;
+  }
+
+  // Configure the Brevo API client
+  const apiClient = Brevo.ApiClient.instance;
+  const apiKey = apiClient.authentications['api-key'];
+  apiKey.apiKey = process.env.BREVO_API_KEY;
+
+  const transactionalEmailsApi = new Brevo.TransactionalEmailsApi();
+
+  const msgToClient = {
+    sender: { email: SENDER_EMAIL, name: 'SEO-ku Consulting' },
+    to: [{ email: formData.email, name: formData.name }],
+    subject: `Your Consultation is Confirmed: ${formData.company}`,
+    htmlContent: `
+      <h3>Hi ${formData.name},</h3>
+      <p>Thank you for booking a consultation. Your meeting is confirmed and has been added to your calendar.</p>
+      <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
+      <p>We look forward to speaking with you.</p>
+      <br/>
+      <p>Best regards,</p>
+      <p>The SEO-ku Team</p>
+    `,
+  };
+  
+  const msgToAdmin = {
+      sender: { email: SENDER_EMAIL, name: 'SEO-ku Booking System' },
+      to: [{ email: RECIPIENT_EMAIL }],
+      subject: `New Booking: ${formData.company}`,
+      textContent: `A new consultation has been booked with ${formData.name} (${formData.email}).\n\nThe event has been added to your Google Calendar.`
+  };
+
+  try {
+    await transactionalEmailsApi.sendTransacEmail(msgToClient);
+    console.log(`Brevo confirmation email sent to ${formData.email}`);
+    await transactionalEmailsApi.sendTransacEmail(msgToAdmin);
+    console.log(`Brevo admin notification sent to ${RECIPIENT_EMAIL}`);
+  } catch (error) {
+    console.error('Error sending email via Brevo:', error.body || error);
+  }
+}
+
+// ====================================================================
 // Function to submit data to Jotform
 // ====================================================================
 async function submitToJotform(formData) {
@@ -38,16 +94,14 @@ async function submitToJotform(formData) {
     return;
   }
 
-  // Map your front-end data to Jotform's Question IDs (QIDs)
-  // These are based on the field IDs you provided (e.g., #input_6 -> QID 6)
   const submissionData = {
     'submission[6]': formData.name,
     'submission[7]': formData.email,
     'submission[8]': formData.company,
     'submission[9]': formData.website,
     'submission[10]': formData.timezone,
-    'submission[11]': formData.focusAreas.join('\n'), // Use newline for multi-select
-    'submission[12]': formData.targetCountries.join(', '), // Comma-separated for chips
+    'submission[11]': formData.focusAreas.join('\n'),
+    'submission[12]': formData.targetCountries.join(', '),
     'submission[13]': formData.timeline,
     'submission[15]': formData.primaryChallenge,
     'submission[16]': `From: ${formData.startISO}\nTo: ${formData.endISO}`
@@ -55,11 +109,9 @@ async function submitToJotform(formData) {
 
   try {
     const url = `https://api.jotform.com/form/${JOTFORM_FORM_ID}/submissions?apiKey=${JOTFORM_API_KEY}`;
-    // Jotform API expects the data in a specific URL-encoded format
     await axios.post(url, new URLSearchParams(submissionData).toString());
     console.log('Successfully submitted data to Jotform.');
   } catch (error) {
-    // Log the error but don't stop the process. The main goal (booking) was successful.
     console.error('Error submitting to Jotform:', error.response ? error.response.data : error.message);
   }
 }
@@ -86,9 +138,8 @@ app.get('/availability', async (req, res) => {
     const availableSlots = [];
     const meetingDurationMinutes = 20;
 
-    // Define working hours in UTC, corresponding to 9 AM - 5 PM in Malaysia (UTC+8)
-    const workDayStartHourUTC = 1; // 9 AM MYT is 1 AM UTC
-    const workDayEndHourUTC = 9;   // 5 PM MYT is 9 AM UTC
+    const workDayStartHourUTC = 1;
+    const workDayEndHourUTC = 9;  
 
     let slot = new Date(startTime);
     slot.setUTCHours(workDayStartHourUTC, 0, 0, 0);
@@ -144,7 +195,13 @@ app.post('/book', async (req, res) => {
     });
     console.log('Event created:', createdEvent.data.htmlLink);
     
-    // After successful Google Calendar booking, submit the data to Jotform.
+    // --- ADDED FOR BREVO ---
+    // After everything else is successful, send the confirmation emails.
+    // Use a 'fire-and-forget' approach so we don't wait for it to finish.
+    sendBrevoConfirmationEmail(payload, createdEvent.data.hangoutLink);
+    // -----------------------
+
+    // Submit the data to Jotform.
     await submitToJotform(payload);
 
     res.status(200).json({
